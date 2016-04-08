@@ -8,6 +8,64 @@ Created on Sat Mar 26 21:51:29 2016
 import sys
 import os
 import numpy as np
+from collections import OrderedDict
+
+from fuel.datasets import IndexableDataset
+from fuel.streams import DataStream
+from fuel.schemes import ShuffledScheme, SequentialScheme
+
+#'''
+#from lasagne examples
+#'''
+#def iterate_minibatches(inputs, targets, batchsize, shuffle=False):
+#    assert len(inputs) == len(targets)
+#    if shuffle:
+#        indices = np.arange(len(inputs))
+#        np.random.shuffle(indices)
+#    for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
+#        if shuffle:
+#            excerpt = indices[start_idx:start_idx + batchsize]
+#        else:
+#            excerpt = slice(start_idx, start_idx + batchsize)
+#        yield inputs[excerpt], targets[excerpt]
+#
+#class DataSet2(object):
+#    
+#    def __init__(self,X,y,batch_size=128,shuffle=False):
+#        self.X = X
+#        self.y = y
+#        self.batch_size = batch_size
+#        self.shuffle = shuffle
+#        
+#    def __iter__(self):
+#        return iterate_minibatches(self.X,self.y,self.batch_size,self.shuffle)
+        
+class FuelDataSet(object):
+    def __init__(self,dataset,batch_size=128,shuffle=False):
+        self.dataset = dataset
+        if shuffle:
+            self.datastream = DataStream(self.dataset,
+                                     iteration_scheme=ShuffledScheme(
+                                     examples=dataset.num_examples,
+                                     batch_size=batch_size))
+        else:
+            self.datastream = DataStream(self.dataset,
+                                     iteration_scheme=SequentialScheme(
+                                     examples=dataset.num_examples,
+                                     batch_size=batch_size))
+
+    def __iter__(self):
+        return self.datastream.get_epoch_iterator()
+        
+
+class DataSet(FuelDataSet):
+    def __init__(self,X,y,batch_size=128,shuffle=False):
+        super(DataSet,self).__init__(IndexableDataset(
+                                    indexables=OrderedDict([
+                                    ('features', X), 
+                                    ('targets', y)]))
+                                    ,batch_size,shuffle)
+    
 
 def load_mnist():
     # We first define a download function, supporting both Python 2 and 3.

@@ -11,20 +11,7 @@ import lasagne
 import numpy as np
 import time
 
-'''
-from lasagne examples
-'''
-def iterate_minibatches(inputs, targets, batchsize, shuffle=False):
-    assert len(inputs) == len(targets)
-    if shuffle:
-        indices = np.arange(len(inputs))
-        np.random.shuffle(indices)
-    for start_idx in range(0, len(inputs) - batchsize + 1, batchsize):
-        if shuffle:
-            excerpt = indices[start_idx:start_idx + batchsize]
-        else:
-            excerpt = slice(start_idx, start_idx + batchsize)
-        yield inputs[excerpt], targets[excerpt]
+from datasets import DataSet
 
 
 
@@ -54,9 +41,11 @@ class Sequential(object):
             self.l2_decays[self.layers[layer_id]] = lambda2
         
             
-    def add(self,layer,lambda1=0.,lambda2=0.,**kwargs):
-        self.layers.append(layer(self.layers[-1],**kwargs))
+    def add(self,layer_type,lambda1=0.,lambda2=0.,**kwargs):
+        l = layer_type(self.layers[-1],**kwargs)
+        self.layers.append( l )
         self.add_regularization(-1,lambda1,lambda2)
+        return l
 
 
         
@@ -120,10 +109,13 @@ class Sequential(object):
         return self._train_fn(X,y)
         
     def score(self,X,y,batch_size = 128):
+        test_data = DataSet(X,y,batch_size,shuffle=True)
+        return self.score_iterator(test_data)
+        
+    def score_iterator(self,iterator):
         val_err = 0
         val_batches = 0
-        for batch in iterate_minibatches(X, y, 
-                                         batch_size, shuffle=False):
+        for batch in iterator:
             inputs, targets = batch
             _,err = self.test_batch(inputs, targets)
             val_err += err
@@ -132,16 +124,13 @@ class Sequential(object):
         return val_err
                                           
     def fit(self, X,y,batch_size= 128, n_epochs=10, validation_data = None, 
-            loglevel =0, validation_split = 0, early_stopping = True):
-        X_val, y_val = None,None
-        val_size = 0
-        X_train, y_train = X,y
+            loglevel =0, validation_split = 0, early_stopping = True,
+            initial_patience=5,min_improvement=.995,patience_increase=2):
+        
         n_samples = X.shape[0]
         
-        if validation_data is not None:
-            X_val, y_val = validation_data
-            val_size =X_val.shape[0]
-        elif 0. < validation_split < 1.:
+        val_iterator = None
+        if (validation_data is None) and (0. < validation_split < 1.):
             val_size = np.floor(validation_split*n_samples)
             val_idx = np.random.choice(n_samples,
                                        size = val_size,
@@ -150,16 +139,38 @@ class Sequential(object):
             train_idx = np.delete(np.arange(n_samples), val_idx)
             X_val, y_val = X[val_idx,],y[val_idx,]
             X_train, y_train = X[train_idx,],y[train_idx,]
+        elif validation_data is not None:
+             X_val, y_val = validation_data
+             X_train, y_train = X,y
+             val_iterator = DataSet(X_val,y_val,shuffle=True)
+        else:
+             X_train, y_train = X,y
+            
+        train_iterator = DataSet(X_train,y_train, batch_size, shuffle=True)
+        self.fit_iterator(train_iterator,n_epochs,val_iterator,loglevel,
+                          early_stopping,initial_patience,min_improvement,
+                          patience_increase)
+                          
+    def fit_iterator(self, train_iterator, 
+                      n_epochs=10, 
+                      val_iterator = None, 
+                      loglevel =0, 
+                      early_stopping = True,
+                      initial_patience=10,
+                      min_improvement=.995,
+                      patience_increase=2):                                          
+
+        
         
         if early_stopping:
-            assert X_val is not None,'early stopping requires validation set'
+            assert val_iterator is not None,'early stopping requires validation set'
             
         #based on lassagne docs
         start_training = time.time()
         train_losses = []
         val_losses = []
         
-        patience = n_samples // batch_size #1 epoch
+        patience = initial_patience
         total_batches = 0
         best_loss = np.inf
 
@@ -169,8 +180,7 @@ class Sequential(object):
             start_time = time.time()
             
             #full pass through data
-            for batch in iterate_minibatches(X_train,y_train, 
-                                             batch_size, shuffle=True):
+            for batch in train_iterator:
                 inputs, targets = batch
                 _,b_loss = self.train_batch(inputs, targets)
                 train_loss += b_loss
@@ -181,12 +191,15 @@ class Sequential(object):
             total_batches += train_batches
             
             #test on validation data
-            val_losses.append(self.score(X_val,y_val,batch_size))
+            if val_iterator is not None:
+                val_losses.append(self.score_iterator(val_iterator))
+
 
             if early_stopping:
                 if val_losses[-1] < best_loss:
-                    if val_losses[-1] < 0.995 * best_loss:
-                        patience = max(patience,2*total_batches)
+                    if val_losses[-1] < min_improvement * best_loss:
+                        patience = max(patience,patience_increase
+                                *total_batches)
                     best_loss = val_losses[-1]
                 if total_batches >= patience:
                     break
@@ -195,7 +208,8 @@ class Sequential(object):
             print("Epoch {} of {} took {:.3f}s".format(
                 epoch + 1, n_epochs, time.time() - start_time))
             print("  training loss:\t\t{:.6f}".format(train_losses[-1]))
-            print("  validation loss:\t\t{:.6f}".format(val_losses[-1]))
+            if val_iterator is not None:
+                print("  validation loss:\t\t{:.6f}".format(val_losses[-1]))
 
                 
                 
